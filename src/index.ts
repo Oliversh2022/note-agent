@@ -18,7 +18,8 @@ import { logToolCall } from './tools/logs.js'
 import { getCost, logCost } from './tools/logCost.js'
 // 共享的 API 客户端：apiKey / baseURL 都在那里读和建，全项目只有一份
 import { client } from './llm/client.js'
-
+import {askStructured} from "./llm/structured.js"
+import {reportToMarkdown} from "./llm/structured.js";
 // 类型 1：对话消息。四种角色 system / user / assistant / tool
 // import type 表示"只导入类型"，编译后会被擦掉，运行时不存在
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions'
@@ -91,13 +92,12 @@ try {
   // 模型每一轮都只读这个数组，它本身不记得上一轮发生了什么。
   const messages: ChatCompletionMessageParam[] = [
     {
-      // role: 'system' 是"规矩"，优先级高于 user，模型每轮都会读到。
-      // 控制 agent 行为最有效的旋钮就是这里。
       role: 'system',
       content:
-        '你是本地笔记助手。规则：最多调用 3 次 search_notes 收集信息；' +
-        '收集够了就必须调用 write_report 把内容写成报告，不要在搜索上空转。' +
-        '报告要基于搜到的真实内容，不要编造。',
+          '你是本地笔记助手。规则：先用 search_notes 找到相关笔记，再用 read_note 读全文，' +
+          '最多调用 3 次 search_notes，不要在搜索上空转。' +
+          '不要自己写文件——写报告由后续步骤统一完成。' +
+          '资料够了就把掌握的内容完整列出来，细节不要省。',
     },
     // 用户的实际需求。路径写清楚，模型就不用瞎猜该写哪儿
     {
@@ -110,6 +110,10 @@ try {
   let round = 0
   // finished：是否正常拿到最终答案。用来区分"正常结束"和"超轮中止"
   let finished = false
+  // 循环里的最终回答要带出来给后面的结构化用。
+  // 为什么必须声明在 while 外面：msg 是 while 块里的 const，出了大括号就没了（块作用域）。
+  // ?? '' 是因为 content 的类型是 string | null，直接赋给 string 会报 TS2322
+  let finalAnswer = ''
   // searchCount：已经搜了几次，配合 MAX_SEARCH 做"软刹车"
   let searchCount = 0
   const MAX_SEARCH = 3
@@ -127,7 +131,6 @@ try {
       messages,
       tools,
     })
-
     // 累计 token。usage 可能为空，?? 0 兜底，避免 NaN 污染总数
     logCost(resp.usage?.total_tokens ?? 0)
 
@@ -159,7 +162,7 @@ try {
             // 让它自己转向写报告。用结果引导，而不是硬拔电源
             toolResult = {
               ok: false,
-              reason: `搜索次数已达上限（${MAX_SEARCH} 次），请直接整理已有信息并调用 write_report`,
+              reason: `搜索次数已达上限（${MAX_SEARCH} 次），请直接整理已读到的内容，不要再搜`,
             }
           } else {
             searchCount++
@@ -212,6 +215,8 @@ try {
 
     // 走到这里说明模型没有要工具，它给的是最终答案
     console.log('最终回答：', msg.content)
+    // 存一份到循环外面，结构化那步要用这段当素材
+    finalAnswer = msg.content ?? ''
     finished = true
     // 必须在 break 之前置标记：break 一跳出去就再也回不到下面了
     break
@@ -221,7 +226,37 @@ try {
   if (!finished) {
     console.log(`超过 8 轮仍未结束，中止（搜索 ${searchCount} 次）`)
   }
+  // ---------- 四、把最终回答整理成结构化周报 ----------
+  // 走到这里说明工具调用已经结束，素材在 finalAnswer 里。
+  // askStructured 负责：让模型吐 JSON → zod 校验 → 不合格把错误塞回去重试，最多 3 次
+  const structured = await askStructured(
+      client,
+      '你是周报整理助手。只输出 JSON，不要任何解释文字。' +
+      'JSON 格式：{"title": string, "summary": string, "items": [{"topic": string, "detail": string}]}',
+      `请根据下面的内容整理成周报：\n${finalAnswer}`,
+  )
+  if (!structured.ok) {
+    // 三次都不合格：打印原因，不落盘（宁可没有周报，也不写一份错的）
+    console.log('结构化失败：', structured.error)
+  } else {
+    // 渲染成 Markdown 文本
+    const md = reportToMarkdown(structured.data)
 
+    // 阶段三的落盘也要写 JSONL：要求是「每次写文件都有一行日志」，
+    // 不能因为这次是代码调的、不是模型调的，就不记
+    const writeStarted = Date.now()
+    const written = await writeReport('reports/week.md', md)
+    await logToolCall({
+      time: new Date().toISOString(),
+      tool: 'write_report',
+      args: { path: 'reports/week.md' },
+      result: written,
+      ms: Date.now() - writeStarted,
+      tokens: 0, // 这一步没请求模型，token 记 0，别假装有
+      retried: structured.attempts > 1, // 结构化重试过就记 true，这才是真实的重试痕迹
+    })
+    console.log('落盘结果：', written)
+  }
   // 打印本次会话总账
   const cost = getCost()
   console.log(`本次会话：${cost.totalCalls} 轮请求，共 ${cost.totalTokens} tokens`)

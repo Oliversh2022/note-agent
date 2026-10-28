@@ -16,6 +16,7 @@
 import { z } from 'zod'
 import type OpenAI from 'openai'
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions'
+import {logCost} from "../tools/logCost.js";
 
 // ---------- 1. 定义"我期望的 JSON 长什么样" ----------
 // z.object = 一个对象；z.string().min(1) = 非空字符串；
@@ -103,7 +104,8 @@ export async function askStructured(
       // 前提：提示词里必须出现 "JSON" 这个词，否则有的服务商会报 400
       response_format: { type: 'json_object' },
     })
-
+    // 每一次结构化请求都记账，失败重试的那几次也算——那些也是钱
+    logCost(resp.usage?.total_tokens ?? 0)
     // content 的类型是 string | null，用 ?? '' 兜成空串
     const text = resp.choices[0].message.content ?? ''
     const parsed = parseReport(text)
@@ -126,4 +128,32 @@ export async function askStructured(
   }
 
   return { ok: false as const, error: '重试 2 次后仍然不合法', attempts: MAX_ATTEMPTS }
+}
+// ---------- 6. 把校验过的 Report 渲染成 Markdown ----------
+// 为什么要单独一个函数：渲染规则集中在一处，以后改格式只改这里，
+// 主循环那边不需要动
+export function reportToMarkdown(r: Report): string {
+  // lines 先一行一行收集，最后一次性拼起来。
+  // 不用字符串 += 在循环里拼：每 += 一次都新建一个字符串，行多了又慢又容易漏换行
+  const lines: string[] = []
+
+  // 一级标题，后面跟一个空行。Markdown 靠空行分段，
+  // 少了空行标题会和正文黏在一起
+  lines.push(`# ${r.title}`)
+  lines.push('')
+
+  // 摘要一段
+  lines.push(r.summary)
+  lines.push('')
+
+  // 每个 item 一个二级标题 + 一段正文
+  for (const item of r.items) {
+    lines.push(`## ${item.topic}`)
+    lines.push('')
+    lines.push(item.detail)
+    lines.push('')
+  }
+
+  // join('\n')：把数组拼成一个字符串，元素之间插入换行符
+  return lines.join('\n')
 }
