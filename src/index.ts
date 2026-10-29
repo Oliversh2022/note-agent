@@ -96,7 +96,9 @@ try {
   // close 不能省：后面 writeReport 的 y/n 确认会自己开一个 readline，
   // 两个同时开着会抢同一个 stdin，表现就是程序卡住不动
   const rl = createInterface({ input: process.stdin, output: process.stdout })
-  const asked = (await rl.question('你的问题（直接回车用默认）：')).trim()
+  // 有命令行参数就用参数，没有才交互问 —— 自动化调用和手动调试两种用法
+  const fromArgv = process.argv[2]
+  const asked = fromArgv ?? (await rl.question('你的问题（直接回车用默认）：')).trim()
 
   // 已经拿到一行输入，立刻关掉，再让 confirm 需要时自己打开
   rl.close()
