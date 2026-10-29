@@ -14,9 +14,11 @@
 
 // zod：运行时校验库。TS 的类型只在编译期存在，zod 能在运行时真的检查数据
 import { z } from 'zod'
+// OpenAI 类型只用于参数检查，不创建第二个客户端
 import type OpenAI from 'openai'
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions'
-import {logCost} from "../tools/logCost.js";
+// 结构化请求也消耗 token，必须和主循环共用同一个计数器
+import { logCost } from '../tools/logCost.js'
 
 // ---------- 1. 定义"我期望的 JSON 长什么样" ----------
 // z.object = 一个对象；z.string().min(1) = 非空字符串；

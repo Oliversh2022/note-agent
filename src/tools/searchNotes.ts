@@ -8,11 +8,13 @@ import { readdir, readFile } from 'node:fs/promises'
 // query: string = 参数是字符串，这是 TS 的类型标注，只做编译期检查
 // Promise<{...}[]> = 这个函数最终会返回一组对象，每个对象有 file 和 snippet
 export async function searchNotes(query: string): Promise<{ file: string; snippet: string }[]> {
-  
+  // 空关键词必须提前挡住：indexOf('') 会返回 0，导致所有笔记都"命中"
   if (query.trim() === '') {
-  return []
-}// 如果关键词为空，直接返回空数组
-  const files = await readdir('notes')// 读 notes 目录，得到文件名数组（相对路径，相对于你运行时所在的目录）
+    return []
+  }
+
+  // 读 notes 目录，得到文件名数组（相对于启动程序时所在的目录）
+  const files = await readdir('notes')
 
   // 只要 .md 结尾的（等于 Python 的 [n for n in files if n.endswith('.md')]）
   const markdownFiles = files.filter((name) => name.endsWith('.md'))

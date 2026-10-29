@@ -4,8 +4,9 @@ import { mkdir, writeFile } from 'node:fs/promises'
 // 写文件前必须让用户确认——这个工具就是"人工确认"的落点
 import { confirm } from './confirm.js'
 
-// 把 content 写到 path。不能直接写，必须先过两道闸
-export async function writeReport(path: string, content: string, confirmed=false) {
+// 把 content 写到 path。不能直接写，必须先过两道闸。
+// confirmed=false 是安全默认值：调用方没明确说"已经问过"，函数就会自己确认
+export async function writeReport(path: string, content: string, confirmed = false) {
   // 闸一：路径白名单。模型给的 path 不可信，可能指向 .env 或系统文件，
   // 所以只允许写在 reports/ 目录下；不合法就直接返回，连问都不问
   // 已知短板：reports/../evil.md 能绕过这个前缀检查，
