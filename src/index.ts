@@ -18,8 +18,12 @@ import { logToolCall } from './tools/logs.js'
 import { getCost, logCost } from './tools/logCost.js'
 // 共享的 API 客户端：apiKey / baseURL 都在那里读和建，全项目只有一份
 import { client } from './llm/client.js'
+// 从终端读一行用户输入。promises 版本才有能 await 的 question()
+import { createInterface } from 'node:readline/promises'
 import {askStructured} from "./llm/structured.js"
 import {reportToMarkdown} from "./llm/structured.js";
+// 复用已有的确认函数，别再新开一个 readline
+import { confirm } from './tools/confirm.js'
 // 类型 1：对话消息。四种角色 system / user / assistant / tool
 // import type 表示"只导入类型"，编译后会被擦掉，运行时不存在
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions'
@@ -90,6 +94,16 @@ const tools: ChatCompletionTool[] = [
 try {
   // messages 是"完整对话历史"，也是模型唯一的记忆载体。
   // 模型每一轮都只读这个数组，它本身不记得上一轮发生了什么。
+  // 问用户要做什么。三方配合：createInterface 打开输入流 → question 等一行 → close 立刻关上。
+  // close 不能省：后面 writeReport 的 y/n 确认会自己开一个 readline，
+  // 两个同时开着会抢同一个 stdin，表现就是程序卡住不动
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  const asked = (await rl.question('你的问题（直接回车用默认）：')).trim()
+
+  // 空输入退回默认问题，方便反复跑
+  const DEFAULT_QUESTION =
+      '把笔记里关于学习的完整内容读出来，整理成一份详细的周报，写到 reports/week.md'
+  const userQuestion = asked || DEFAULT_QUESTION
   const messages: ChatCompletionMessageParam[] = [
     {
       role: 'system',
@@ -102,7 +116,7 @@ try {
     // 用户的实际需求。路径写清楚，模型就不用瞎猜该写哪儿
     {
       role: 'user',
-      content: '把笔记里关于学习的完整内容读出来，整理成一份详细的周报，写到 reports/week.md',
+      content: userQuestion,
     },
   ]
 
@@ -226,37 +240,43 @@ try {
   if (!finished) {
     console.log(`超过 8 轮仍未结束，中止（搜索 ${searchCount} 次）`)
   }
+  // 看完回答再问要不要出周报：这是唯一的确认点，落盘时不再重复问
+  const wantReport = await confirm('要整理成周报文件吗？(y/n) ')
   // ---------- 四、把最终回答整理成结构化周报 ----------
   // 走到这里说明工具调用已经结束，素材在 finalAnswer 里。
   // askStructured 负责：让模型吐 JSON → zod 校验 → 不合格把错误塞回去重试，最多 3 次
-  const structured = await askStructured(
-      client,
-      '你是周报整理助手。只输出 JSON，不要任何解释文字。' +
-      'JSON 格式：{"title": string, "summary": string, "items": [{"topic": string, "detail": string}]}',
-      `请根据下面的内容整理成周报：\n${finalAnswer}`,
-  )
-  if (!structured.ok) {
-    // 三次都不合格：打印原因，不落盘（宁可没有周报，也不写一份错的）
-    console.log('结构化失败：', structured.error)
-  } else {
-    // 渲染成 Markdown 文本
-    const md = reportToMarkdown(structured.data)
+  if (wantReport) {
+    const structured = await askStructured(
+        client,
+        '你是周报整理助手。只输出 JSON，不要任何解释文字。' +
+        'JSON 格式：{"title": string, "summary": string, "items": [{"topic": string, "detail": string}]}',
+        `请根据下面的内容整理成周报：\n${finalAnswer}`,
+    )
+    if (!structured.ok) {
+      // 三次都不合格：打印原因，不落盘（宁可没有周报，也不写一份错的）
+      console.log('结构化失败：', structured.error)
+    } else {
+      // 渲染成 Markdown 文本
+      const md = reportToMarkdown(structured.data)
 
-    // 阶段三的落盘也要写 JSONL：要求是「每次写文件都有一行日志」，
-    // 不能因为这次是代码调的、不是模型调的，就不记
-    const writeStarted = Date.now()
-    const written = await writeReport('reports/week.md', md)
-    await logToolCall({
-      time: new Date().toISOString(),
-      tool: 'write_report',
-      args: { path: 'reports/week.md' },
-      result: written,
-      ms: Date.now() - writeStarted,
-      tokens: 0, // 这一步没请求模型，token 记 0，别假装有
-      retried: structured.attempts > 1, // 结构化重试过就记 true，这才是真实的重试痕迹
-    })
-    console.log('落盘结果：', written)
-  }
+      // 阶段三的落盘也要写 JSONL：要求是「每次写文件都有一行日志」，
+      // 不能因为这次是代码调的、不是模型调的，就不记
+      const writeStarted = Date.now()
+      const written = await writeReport('reports/week.md', md, true)
+      await logToolCall({
+        time: new Date().toISOString(),
+        tool: 'write_report',
+        args: { path: 'reports/week.md' },
+        result: written,
+        ms: Date.now() - writeStarted,
+        tokens: 0, // 这一步没请求模型，token 记 0，别假装有
+        retried: structured.attempts > 1, // 结构化重试过就记 true，这才是真实的重试痕迹
+      })
+      console.log('落盘结果：', written)
+    }
+} else {
+  console.log('（未生成周报文件，只保留上面的回答）')
+}
   // 打印本次会话总账
   const cost = getCost()
   console.log(`本次会话：${cost.totalCalls} 轮请求，共 ${cost.totalTokens} tokens`)

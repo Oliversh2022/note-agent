@@ -5,7 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { confirm } from './confirm.js'
 
 // 把 content 写到 path。不能直接写，必须先过两道闸
-export async function writeReport(path: string, content: string) {
+export async function writeReport(path: string, content: string, confirmed=false) {
   // 闸一：路径白名单。模型给的 path 不可信，可能指向 .env 或系统文件，
   // 所以只允许写在 reports/ 目录下；不合法就直接返回，连问都不问
   // 已知短板：reports/../evil.md 能绕过这个前缀检查，
@@ -13,14 +13,16 @@ export async function writeReport(path: string, content: string) {
   if (!path.startsWith('reports/')) {
     return { ok: false, reason: '只允许写到 reports/ 目录下' }
   }
-
-  // 闸二：人工确认。用户拒绝时也要"返回结果"，不能静默失败——
-  // 模型需要知道被拒了，它才会换个做法或者停下来问用户
-  const allowed = await confirm(`要写入 ${path} 吗？(y/n) `)
-  if (!allowed) {
-    return { ok: false, reason: '用户拒绝写入' }
+  // 闸二：人工确认。
+  // confirmed 默认 false —— 调用方没说"已经问过"，就一定问。
+  // 传 true 的唯一场景：命令行流程里外层已经问过一次，避免同一个意图问两遍。
+  // 注意：路径白名单永远不跳过，那是安全底线，不是"确认"
+  if (!confirmed) {
+    const allowed = await confirm(`要写入 ${path} 吗？(y/n) `)
+    if (!allowed) {
+      return { ok: false, reason: '用户拒绝写入' }
+    }
   }
-
   // 目录不存在就先建（recursive: true 已存在也不报错）
   await mkdir('reports', { recursive: true })
   // 'utf8' 必须给，否则中文会写成乱码
