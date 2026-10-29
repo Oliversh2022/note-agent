@@ -75,6 +75,8 @@ logs/agent.jsonl        运行日志
 | `tokens` | 该轮请求的 token 数；纯本地动作记 0 |
 | `retried` | 是否重试过 |
 
+完整样例见 [`samples/agent.sample.jsonl`](samples/agent.sample.jsonl)。
+
 ## 已知限制
 
 - 周报素材取自模型的最终回答，不是笔记原文。模型若只回一句「已完成」，结构化那步会拿到贫瘠素材并有编造风险。
@@ -87,3 +89,4 @@ logs/agent.jsonl        运行日志
 ## 技术栈
 
 TypeScript / Node.js / openai SDK（兼容 DeepSeek）/ zod / tsx
+
