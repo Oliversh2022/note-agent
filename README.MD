@@ -86,6 +86,8 @@ logs/agent.jsonl        运行日志
 - Windows PowerShell 下输入 `y` 偶尔回显成 `yy`，是终端回显问题，不影响判定。
 - 路径白名单用 `startsWith('reports/')` 判断，`reports/../evil.md` 这类路径能绕过，严格做法要 `path.resolve` 归一化后再比对。
 
+每个失败的现象、根因、修法和剩余风险，见 [失败处理说明.md](失败处理说明.md)。
+
 ## 技术栈
 
 TypeScript / Node.js / openai SDK（兼容 DeepSeek）/ zod / tsx
